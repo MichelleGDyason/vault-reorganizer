@@ -1,0 +1,55 @@
+.vault-reorganizer-modal {
+  max-width: 980px;
+}
+
+.vault-reorganizer-button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 16px 0;
+}
+
+.vault-reorganizer-summary {
+  border-top: 1px solid var(--background-modifier-border);
+  margin-top: 12px;
+  padding-top: 12px;
+}
+
+.vault-reorganizer-warning {
+  color: var(--text-warning);
+  margin: 6px 0;
+}
+
+.vault-reorganizer-preview {
+  max-height: 420px;
+  overflow: auto;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  margin-top: 12px;
+}
+
+.vault-reorganizer-preview table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.vault-reorganizer-preview th,
+.vault-reorganizer-preview td {
+  border-bottom: 1px solid var(--background-modifier-border);
+  padding: 6px 8px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.vault-reorganizer-preview th {
+  background: var(--background-secondary);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.vault-reorganizer-path {
+  font-family: var(--font-monospace);
+  font-size: var(--font-smaller);
+  word-break: break-word;
+}
