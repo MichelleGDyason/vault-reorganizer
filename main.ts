@@ -9,7 +9,8 @@ import {
   TAbstractFile,
   TFile,
   TFolder,
-  normalizePath
+  normalizePath,
+  requestUrl
 } from "obsidian";
 
 type StrategyId = "five-folder" | "flat-root" | "attachments-only";
@@ -213,7 +214,7 @@ const DEFAULT_SETTINGS: VaultReorganizerSettings = {
   canvasesFolder: "Canvases",
   basesFolder: "Bases",
   otherFilesFolder: "Files",
-  excludedFolders: ".obsidian,.trash,Archive",
+  excludedFolders: ".trash,Archive",
   templateFolders: "Templates,Template",
   imageExtensions: "png,jpg,jpeg,gif,webp,svg,avif,bmp,heic",
   videoExtensions: "mp4,mov,webm,mkv,avi,m4v",
@@ -301,7 +302,9 @@ export default class VaultReorganizerPlugin extends Plugin {
   }
 
   async loadSettings(): Promise<void> {
-    this.settings = normalizeSettings(Object.assign({}, DEFAULT_SETTINGS, await this.loadData()));
+    const loadedSettings = (await this.loadData()) as unknown;
+    const savedSettings = isRecord(loadedSettings) ? (loadedSettings as Partial<VaultReorganizerSettings>) : {};
+    this.settings = normalizeSettings({ ...DEFAULT_SETTINGS, ...savedSettings });
   }
 
   async saveSettings(): Promise<void> {
@@ -608,7 +611,7 @@ export default class VaultReorganizerPlugin extends Plugin {
         console.error("Vault Reorganizer failed to move file", {
           source: move.source,
           target: move.target,
-          error
+          error: formatUnknownError(error)
         });
         failed.push({
           source: move.source,
@@ -748,7 +751,7 @@ export default class VaultReorganizerPlugin extends Plugin {
 
     const currentFile = this.app.vault.getAbstractFileByPath(file.path);
     if (currentFile instanceof TFile) {
-      await this.app.vault.delete(currentFile, false);
+      await this.app.fileManager.trashFile(currentFile);
       return;
     }
 
@@ -952,11 +955,12 @@ export default class VaultReorganizerPlugin extends Plugin {
 
     const data = await this.app.vault.adapter.readBinary(file.path);
     const imageUrl = `data:${mimeType};base64,${arrayBufferToBase64(data)}`;
-    const response = await fetch(OPENAI_RESPONSES_URL, {
+    const response = await requestUrl({
+      url: OPENAI_RESPONSES_URL,
       method: "POST",
+      contentType: "application/json",
       headers: {
-        Authorization: `Bearer ${this.settings.openAiApiKey.trim()}`,
-        "Content-Type": "application/json"
+        Authorization: `Bearer ${this.settings.openAiApiKey.trim()}`
       },
       body: JSON.stringify({
         model: this.settings.imageRenameModel.trim() || DEFAULT_SETTINGS.imageRenameModel,
@@ -981,11 +985,12 @@ export default class VaultReorganizerPlugin extends Plugin {
             ]
           }
         ]
-      })
+      }),
+      throw: false
     });
 
-    const responseText = await response.text();
-    if (!response.ok) {
+    const responseText = response.text;
+    if (response.status < 200 || response.status >= 300) {
       throw new Error(`OpenAI image naming failed (${response.status}): ${redactSecretLikeText(responseText)}`);
     }
 
@@ -1119,11 +1124,12 @@ export default class VaultReorganizerPlugin extends Plugin {
     content: OpenAIHandwritingContentPart[],
     maxOutputTokens: number
   ): Promise<HandwritingExtraction> {
-    const response = await fetch(OPENAI_RESPONSES_URL, {
+    const response = await requestUrl({
+      url: OPENAI_RESPONSES_URL,
       method: "POST",
+      contentType: "application/json",
       headers: {
-        Authorization: `Bearer ${this.settings.openAiApiKey.trim()}`,
-        "Content-Type": "application/json"
+        Authorization: `Bearer ${this.settings.openAiApiKey.trim()}`
       },
       body: JSON.stringify({
         model: this.settings.handwritingModel.trim() || DEFAULT_SETTINGS.handwritingModel,
@@ -1135,11 +1141,12 @@ export default class VaultReorganizerPlugin extends Plugin {
             content
           }
         ]
-      })
+      }),
+      throw: false
     });
 
-    const responseText = await response.text();
-    if (!response.ok) {
+    const responseText = response.text;
+    if (response.status < 200 || response.status >= 300) {
       throw new Error(`OpenAI handwriting conversion failed (${response.status}): ${redactSecretLikeText(responseText)}`);
     }
 
@@ -1185,6 +1192,10 @@ export default class VaultReorganizerPlugin extends Plugin {
 
   isExcluded(path: string): boolean {
     if (isHiddenPath(path)) {
+      return true;
+    }
+
+    if (pathStartsWithFolder(path, this.app.vault.configDir)) {
       return true;
     }
 
@@ -1381,7 +1392,7 @@ export default class VaultReorganizerPlugin extends Plugin {
 
         console.error("Vault Reorganizer failed to remove empty folder", {
           path: folderPath,
-          error
+          error: message
         });
         result.failed.push({ path: folderPath, error: message });
       }
@@ -1404,7 +1415,12 @@ export default class VaultReorganizerPlugin extends Plugin {
       }
 
       try {
-        await this.app.vault.adapter.remove(filePath);
+        const file = this.app.vault.getAbstractFileByPath(filePath);
+        if (file instanceof TFile) {
+          await this.app.fileManager.trashFile(file);
+        } else {
+          await this.app.vault.adapter.remove(filePath);
+        }
         removed += 1;
       } catch (error) {
         result.failed.push({
@@ -1420,7 +1436,7 @@ export default class VaultReorganizerPlugin extends Plugin {
   async deleteEmptyFolder(folderPath: string): Promise<void> {
     const folder = this.app.vault.getAbstractFileByPath(folderPath);
     if (folder instanceof TFolder) {
-      await this.app.vault.delete(folder, false);
+      await this.app.fileManager.trashFile(folder);
       return;
     }
 
@@ -1428,7 +1444,7 @@ export default class VaultReorganizerPlugin extends Plugin {
   }
 
   async collectFolderPaths(folderPath: string, result: FolderCleanupResult): Promise<string[]> {
-    let listed;
+    let listed: { files: string[]; folders: string[] };
     try {
       listed = await this.app.vault.adapter.list(folderPath);
     } catch (error) {
@@ -1483,6 +1499,63 @@ export default class VaultReorganizerPlugin extends Plugin {
   }
 }
 
+class ConfirmationModal extends Modal {
+  private readonly title: string;
+  private readonly message: string;
+  private readonly confirmText: string;
+  private readonly resolve: (confirmed: boolean) => void;
+  private resolved = false;
+
+  constructor(app: App, title: string, message: string, confirmText: string, resolve: (confirmed: boolean) => void) {
+    super(app);
+    this.title = title;
+    this.message = message;
+    this.confirmText = confirmText;
+    this.resolve = resolve;
+  }
+
+  onOpen(): void {
+    const { contentEl } = this;
+    contentEl.empty();
+    new Setting(contentEl).setName(this.title).setHeading();
+    contentEl.createEl("p", { text: this.message });
+
+    const buttonRow = contentEl.createDiv({ cls: "vault-reorganizer-confirm-buttons" });
+    new ButtonComponent(buttonRow)
+      .setButtonText("Cancel")
+      .onClick(() => {
+        this.finish(false);
+      });
+    new ButtonComponent(buttonRow)
+      .setButtonText(this.confirmText)
+      .setCta()
+      .onClick(() => {
+        this.finish(true);
+      });
+  }
+
+  onClose(): void {
+    this.contentEl.empty();
+    this.finish(false);
+  }
+
+  private finish(confirmed: boolean): void {
+    if (this.resolved) {
+      return;
+    }
+
+    this.resolved = true;
+    this.resolve(confirmed);
+    this.close();
+  }
+}
+
+function confirmAction(app: App, title: string, message: string, confirmText: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    new ConfirmationModal(app, title, message, confirmText, resolve).open();
+  });
+}
+
 class ReorganizerModal extends Modal {
   plugin: VaultReorganizerPlugin;
   strategy: StrategyId;
@@ -1505,7 +1578,7 @@ class ReorganizerModal extends Modal {
     this.contentEl.empty();
     this.contentEl.addClass("vault-reorganizer-modal");
 
-    this.contentEl.createEl("h2", { text: "Vault reorganization planner" });
+    new Setting(this.contentEl).setName("Vault reorganization planner").setHeading();
 
     new Setting(this.contentEl)
       .setName("Strategy")
@@ -1612,13 +1685,16 @@ class ReorganizerModal extends Modal {
   }
 
   async generateImageRenamePreview(): Promise<void> {
-    const confirmed = window.confirm(
+    const confirmed = await confirmAction(
+      this.app,
+      "Generate image rename preview",
       `Analyze up to ${normalizePositiveInteger(
         this.plugin.settings.imageRenameMaxFiles,
         DEFAULT_SETTINGS.imageRenameMaxFiles
       )} generic image filenames with OpenAI now? The preview will also move image files into ${cleanFolderPath(
         this.plugin.settings.imagesFolder
-      ) || "the vault root"}.`
+      ) || "the vault root"}.`,
+      "Generate preview"
     );
     if (!confirmed) {
       return;
@@ -1655,8 +1731,11 @@ class ReorganizerModal extends Modal {
             this.plugin.settings.handwritingMaxFiles,
             DEFAULT_SETTINGS.handwritingMaxFiles
           )} supported images/PDFs in ${sourceLabel}`;
-    const confirmed = window.confirm(
-      `Analyze ${scopeText} and create a Markdown preview for handwritten notes?`
+    const confirmed = await confirmAction(
+      this.app,
+      "Generate handwriting preview",
+      `Analyze ${scopeText} and create a Markdown preview for handwritten notes?`,
+      "Generate preview"
     );
     if (!confirmed) {
       return;
@@ -1681,17 +1760,6 @@ class ReorganizerModal extends Modal {
   }
 
   renderEmptyPreview(): void {
-    if (
-      !this.summaryEl ||
-      !this.previewEl ||
-      !this.applyButton ||
-      !this.cleanupButton ||
-      !this.copyReportButton ||
-      !this.createReportButton
-    ) {
-      return;
-    }
-
     this.applyButton.setDisabled(true);
     this.applyButton.setButtonText("Apply previewed moves");
     this.cleanupButton.setDisabled(false);
@@ -1803,7 +1871,7 @@ class ReorganizerModal extends Modal {
             this.plugin.settings
           )} now? Make sure the vault is backed up before continuing.`
         : `Apply ${itemCount} previewed item${itemCount === 1 ? "" : "s"} now? Make sure the vault is backed up before continuing.`;
-    const confirmed = window.confirm(confirmationText);
+    const confirmed = await confirmAction(this.app, "Apply preview", confirmationText, "Apply");
     if (!confirmed) {
       return;
     }
@@ -2115,7 +2183,7 @@ class VaultReorganizerSettingTab extends PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
 
-    containerEl.createEl("h2", { text: "Vault Reorganizer" });
+    new Setting(containerEl).setName("Vault Reorganizer").setHeading();
 
     new Setting(containerEl)
       .setName("Default strategy")
@@ -2247,7 +2315,7 @@ class VaultReorganizerSettingTab extends PluginSettingTab {
       .setDesc("Comma-separated folder names or paths.")
       .addText((text) =>
         text
-          .setPlaceholder(".obsidian,.trash,Archive")
+          .setPlaceholder(`${this.app.vault.configDir},.trash,Archive`)
           .setValue(this.plugin.settings.excludedFolders)
           .onChange(async (value) => {
             this.plugin.settings.excludedFolders = value;
@@ -2752,7 +2820,7 @@ function buildOversizedHandwritingFileReason(file: TFile, canSplitPdf = false): 
 }
 
 async function loadPdfJsRuntime(): Promise<PdfJsRuntime> {
-  const globalWithWorker = globalThis as typeof globalThis & PdfJsWorkerGlobal;
+  const globalWithWorker = activeWindow as Window & PdfJsWorkerGlobal;
   const previousWorker = globalWithWorker.pdfjsWorker;
   const [pdfJs, worker] = await Promise.all([
     import("pdfjs-dist/legacy/build/pdf.mjs"),
@@ -2809,7 +2877,7 @@ async function renderPdfPageAtScale(
   scale: number
 ): Promise<RenderedPdfPageImage> {
   const viewport = page.getViewport({ scale });
-  const canvas = document.createElement("canvas");
+  const canvas = activeDocument.createElement("canvas");
   canvas.width = Math.ceil(viewport.width);
   canvas.height = Math.ceil(viewport.height);
 
@@ -3302,33 +3370,15 @@ function formatCleanupNotice(cleanup: FolderCleanupResult): string {
 }
 
 async function writeTextToClipboard(text: string): Promise<void> {
-  let clipboardError: unknown = null;
-
-  if (navigator.clipboard?.writeText) {
-    try {
-      await navigator.clipboard.writeText(text);
-      return;
-    } catch (error) {
-      clipboardError = error;
-    }
+  const clipboard = activeWindow.navigator.clipboard;
+  if (!clipboard?.writeText) {
+    throw new Error("Clipboard API is not available.");
   }
 
-  const textArea = document.createElement("textarea");
-  textArea.value = text;
-  textArea.style.position = "fixed";
-  textArea.style.left = "-9999px";
-  textArea.style.top = "0";
-  document.body.appendChild(textArea);
-
   try {
-    textArea.focus();
-    textArea.select();
-    const copied = document.execCommand("copy");
-    if (!copied) {
-      throw clipboardError instanceof Error ? clipboardError : new Error("Clipboard copy was not permitted.");
-    }
-  } finally {
-    textArea.remove();
+    await clipboard.writeText(text);
+  } catch (error) {
+    throw error instanceof Error ? error : new Error("Clipboard copy was not permitted.");
   }
 }
 

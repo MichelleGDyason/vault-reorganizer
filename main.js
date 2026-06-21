@@ -99762,7 +99762,7 @@ var DEFAULT_SETTINGS = {
   canvasesFolder: "Canvases",
   basesFolder: "Bases",
   otherFilesFolder: "Files",
-  excludedFolders: ".obsidian,.trash,Archive",
+  excludedFolders: ".trash,Archive",
   templateFolders: "Templates,Template",
   imageExtensions: "png,jpg,jpeg,gif,webp,svg,avif,bmp,heic",
   videoExtensions: "mp4,mov,webm,mkv,avi,m4v",
@@ -99842,7 +99842,9 @@ var VaultReorganizerPlugin = class extends import_obsidian.Plugin {
     this.addSettingTab(new VaultReorganizerSettingTab(this.app, this));
   }
   async loadSettings() {
-    this.settings = normalizeSettings(Object.assign({}, DEFAULT_SETTINGS, await this.loadData()));
+    const loadedSettings = await this.loadData();
+    const savedSettings = isRecord(loadedSettings) ? loadedSettings : {};
+    this.settings = normalizeSettings({ ...DEFAULT_SETTINGS, ...savedSettings });
   }
   async saveSettings() {
     await this.saveData(this.settings);
@@ -100103,7 +100105,7 @@ var VaultReorganizerPlugin = class extends import_obsidian.Plugin {
         console.error("Vault Reorganizer failed to move file", {
           source: move.source,
           target: move.target,
-          error
+          error: formatUnknownError(error)
         });
         failed.push({
           source: move.source,
@@ -100224,7 +100226,7 @@ var VaultReorganizerPlugin = class extends import_obsidian.Plugin {
     await this.app.vault.createBinary(target, data);
     const currentFile = this.app.vault.getAbstractFileByPath(file.path);
     if (currentFile instanceof import_obsidian.TFile) {
-      await this.app.vault.delete(currentFile, false);
+      await this.app.fileManager.trashFile(currentFile);
       return;
     }
     await this.app.vault.adapter.remove(file.path);
@@ -100385,11 +100387,12 @@ var VaultReorganizerPlugin = class extends import_obsidian.Plugin {
     }
     const data = await this.app.vault.adapter.readBinary(file.path);
     const imageUrl = `data:${mimeType};base64,${arrayBufferToBase64(data)}`;
-    const response = await fetch(OPENAI_RESPONSES_URL, {
+    const response = await (0, import_obsidian.requestUrl)({
+      url: OPENAI_RESPONSES_URL,
       method: "POST",
+      contentType: "application/json",
       headers: {
-        Authorization: `Bearer ${this.settings.openAiApiKey.trim()}`,
-        "Content-Type": "application/json"
+        Authorization: `Bearer ${this.settings.openAiApiKey.trim()}`
       },
       body: JSON.stringify({
         model: this.settings.imageRenameModel.trim() || DEFAULT_SETTINGS.imageRenameModel,
@@ -100411,10 +100414,11 @@ var VaultReorganizerPlugin = class extends import_obsidian.Plugin {
             ]
           }
         ]
-      })
+      }),
+      throw: false
     });
-    const responseText = await response.text();
-    if (!response.ok) {
+    const responseText = response.text;
+    if (response.status < 200 || response.status >= 300) {
       throw new Error(`OpenAI image naming failed (${response.status}): ${redactSecretLikeText(responseText)}`);
     }
     const parsed = safeParseJson(responseText);
@@ -100527,11 +100531,12 @@ var VaultReorganizerPlugin = class extends import_obsidian.Plugin {
     }
   }
   async requestOpenAiHandwritingExtraction(content, maxOutputTokens) {
-    const response = await fetch(OPENAI_RESPONSES_URL, {
+    const response = await (0, import_obsidian.requestUrl)({
+      url: OPENAI_RESPONSES_URL,
       method: "POST",
+      contentType: "application/json",
       headers: {
-        Authorization: `Bearer ${this.settings.openAiApiKey.trim()}`,
-        "Content-Type": "application/json"
+        Authorization: `Bearer ${this.settings.openAiApiKey.trim()}`
       },
       body: JSON.stringify({
         model: this.settings.handwritingModel.trim() || DEFAULT_SETTINGS.handwritingModel,
@@ -100543,10 +100548,11 @@ var VaultReorganizerPlugin = class extends import_obsidian.Plugin {
             content
           }
         ]
-      })
+      }),
+      throw: false
     });
-    const responseText = await response.text();
-    if (!response.ok) {
+    const responseText = response.text;
+    if (response.status < 200 || response.status >= 300) {
       throw new Error(`OpenAI handwriting conversion failed (${response.status}): ${redactSecretLikeText(responseText)}`);
     }
     return parseHandwritingExtraction(safeParseJson(responseText));
@@ -100581,6 +100587,9 @@ var VaultReorganizerPlugin = class extends import_obsidian.Plugin {
   }
   isExcluded(path) {
     if (isHiddenPath(path)) {
+      return true;
+    }
+    if (pathStartsWithFolder(path, this.app.vault.configDir)) {
       return true;
     }
     if (pathStartsWithFolder(path, REPORTS_FOLDER)) {
@@ -100733,7 +100742,7 @@ var VaultReorganizerPlugin = class extends import_obsidian.Plugin {
         }
         console.error("Vault Reorganizer failed to remove empty folder", {
           path: folderPath,
-          error
+          error: message
         });
         result.failed.push({ path: folderPath, error: message });
       }
@@ -100751,7 +100760,12 @@ var VaultReorganizerPlugin = class extends import_obsidian.Plugin {
         continue;
       }
       try {
-        await this.app.vault.adapter.remove(filePath);
+        const file = this.app.vault.getAbstractFileByPath(filePath);
+        if (file instanceof import_obsidian.TFile) {
+          await this.app.fileManager.trashFile(file);
+        } else {
+          await this.app.vault.adapter.remove(filePath);
+        }
         removed += 1;
       } catch (error) {
         result.failed.push({
@@ -100765,7 +100779,7 @@ var VaultReorganizerPlugin = class extends import_obsidian.Plugin {
   async deleteEmptyFolder(folderPath) {
     const folder = this.app.vault.getAbstractFileByPath(folderPath);
     if (folder instanceof import_obsidian.TFolder) {
-      await this.app.vault.delete(folder, false);
+      await this.app.fileManager.trashFile(folder);
       return;
     }
     await this.app.vault.adapter.rmdir(folderPath, false);
@@ -100809,6 +100823,46 @@ var VaultReorganizerPlugin = class extends import_obsidian.Plugin {
     ].map(cleanFolderPath).filter(Boolean);
   }
 };
+var ConfirmationModal = class extends import_obsidian.Modal {
+  constructor(app, title, message, confirmText, resolve) {
+    super(app);
+    this.resolved = false;
+    this.title = title;
+    this.message = message;
+    this.confirmText = confirmText;
+    this.resolve = resolve;
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    new import_obsidian.Setting(contentEl).setName(this.title).setHeading();
+    contentEl.createEl("p", { text: this.message });
+    const buttonRow = contentEl.createDiv({ cls: "vault-reorganizer-confirm-buttons" });
+    new import_obsidian.ButtonComponent(buttonRow).setButtonText("Cancel").onClick(() => {
+      this.finish(false);
+    });
+    new import_obsidian.ButtonComponent(buttonRow).setButtonText(this.confirmText).setCta().onClick(() => {
+      this.finish(true);
+    });
+  }
+  onClose() {
+    this.contentEl.empty();
+    this.finish(false);
+  }
+  finish(confirmed) {
+    if (this.resolved) {
+      return;
+    }
+    this.resolved = true;
+    this.resolve(confirmed);
+    this.close();
+  }
+};
+function confirmAction(app, title, message, confirmText) {
+  return new Promise((resolve) => {
+    new ConfirmationModal(app, title, message, confirmText, resolve).open();
+  });
+}
 var ReorganizerModal = class extends import_obsidian.Modal {
   constructor(app, plugin) {
     super(app);
@@ -100820,7 +100874,7 @@ var ReorganizerModal = class extends import_obsidian.Modal {
   onOpen() {
     this.contentEl.empty();
     this.contentEl.addClass("vault-reorganizer-modal");
-    this.contentEl.createEl("h2", { text: "Vault reorganization planner" });
+    new import_obsidian.Setting(this.contentEl).setName("Vault reorganization planner").setHeading();
     new import_obsidian.Setting(this.contentEl).setName("Strategy").addDropdown((dropdown) => {
       dropdown.addOptions(STRATEGY_LABELS).setValue(this.strategy).onChange((value) => {
         this.strategy = value;
@@ -100884,13 +100938,16 @@ var ReorganizerModal = class extends import_obsidian.Modal {
     }
   }
   async generateImageRenamePreview() {
-    const confirmed = window.confirm(
+    const confirmed = await confirmAction(
+      this.app,
+      "Generate image rename preview",
       `Analyze up to ${normalizePositiveInteger(
         this.plugin.settings.imageRenameMaxFiles,
         DEFAULT_SETTINGS.imageRenameMaxFiles
       )} generic image filenames with OpenAI now? The preview will also move image files into ${cleanFolderPath(
         this.plugin.settings.imagesFolder
-      ) || "the vault root"}.`
+      ) || "the vault root"}.`,
+      "Generate preview"
     );
     if (!confirmed) {
       return;
@@ -100921,8 +100978,11 @@ var ReorganizerModal = class extends import_obsidian.Modal {
       this.plugin.settings.handwritingMaxFiles,
       DEFAULT_SETTINGS.handwritingMaxFiles
     )} supported images/PDFs in ${sourceLabel}`;
-    const confirmed = window.confirm(
-      `Analyze ${scopeText} and create a Markdown preview for handwritten notes?`
+    const confirmed = await confirmAction(
+      this.app,
+      "Generate handwriting preview",
+      `Analyze ${scopeText} and create a Markdown preview for handwritten notes?`,
+      "Generate preview"
     );
     if (!confirmed) {
       return;
@@ -100944,9 +101004,6 @@ var ReorganizerModal = class extends import_obsidian.Modal {
     }
   }
   renderEmptyPreview() {
-    if (!this.summaryEl || !this.previewEl || !this.applyButton || !this.cleanupButton || !this.copyReportButton || !this.createReportButton) {
-      return;
-    }
     this.applyButton.setDisabled(true);
     this.applyButton.setButtonText("Apply previewed moves");
     this.cleanupButton.setDisabled(false);
@@ -101037,7 +101094,7 @@ var ReorganizerModal = class extends import_obsidian.Modal {
     const confirmationText = this.plan.kind === "handwriting" ? `Create ${itemCount} Markdown note${itemCount === 1 ? "" : "s"} in ${getHandwritingNotesFolder(
       this.plugin.settings
     )} now? Make sure the vault is backed up before continuing.` : `Apply ${itemCount} previewed item${itemCount === 1 ? "" : "s"} now? Make sure the vault is backed up before continuing.`;
-    const confirmed = window.confirm(confirmationText);
+    const confirmed = await confirmAction(this.app, "Apply preview", confirmationText, "Apply");
     if (!confirmed) {
       return;
     }
@@ -101289,7 +101346,7 @@ var VaultReorganizerSettingTab = class extends import_obsidian.PluginSettingTab 
   display() {
     const { containerEl } = this;
     containerEl.empty();
-    containerEl.createEl("h2", { text: "Vault Reorganizer" });
+    new import_obsidian.Setting(containerEl).setName("Vault Reorganizer").setHeading();
     new import_obsidian.Setting(containerEl).setName("Default strategy").addDropdown((dropdown) => {
       dropdown.addOptions(STRATEGY_LABELS).setValue(this.plugin.settings.strategy).onChange(async (value) => {
         this.plugin.settings.strategy = value;
@@ -101351,7 +101408,7 @@ var VaultReorganizerSettingTab = class extends import_obsidian.PluginSettingTab 
       })
     );
     new import_obsidian.Setting(containerEl).setName("Excluded folders").setDesc("Comma-separated folder names or paths.").addText(
-      (text) => text.setPlaceholder(".obsidian,.trash,Archive").setValue(this.plugin.settings.excludedFolders).onChange(async (value) => {
+      (text) => text.setPlaceholder(`${this.app.vault.configDir},.trash,Archive`).setValue(this.plugin.settings.excludedFolders).onChange(async (value) => {
         this.plugin.settings.excludedFolders = value;
         await this.plugin.saveSettings();
       })
@@ -101652,7 +101709,7 @@ function buildOversizedHandwritingFileReason(file, canSplitPdf = false) {
   return `File is ${size}; direct handwriting conversion supports files up to ${limit}.`;
 }
 async function loadPdfJsRuntime() {
-  const globalWithWorker = globalThis;
+  const globalWithWorker = activeWindow;
   const previousWorker = globalWithWorker.pdfjsWorker;
   const [pdfJs, worker] = await Promise.all([
     Promise.resolve().then(() => (init_pdf(), pdf_exports)),
@@ -101694,7 +101751,7 @@ async function renderPdfPageForHandwriting(page, pageNumber, detail) {
 }
 async function renderPdfPageAtScale(page, pageNumber, scale) {
   const viewport = page.getViewport({ scale });
-  const canvas = document.createElement("canvas");
+  const canvas = activeDocument.createElement("canvas");
   canvas.width = Math.ceil(viewport.width);
   canvas.height = Math.ceil(viewport.height);
   try {
@@ -102073,31 +102130,14 @@ function formatCleanupNotice(cleanup) {
   return base;
 }
 async function writeTextToClipboard(text) {
-  var _a3;
-  let clipboardError = null;
-  if ((_a3 = navigator.clipboard) == null ? void 0 : _a3.writeText) {
-    try {
-      await navigator.clipboard.writeText(text);
-      return;
-    } catch (error) {
-      clipboardError = error;
-    }
+  const clipboard = activeWindow.navigator.clipboard;
+  if (!(clipboard == null ? void 0 : clipboard.writeText)) {
+    throw new Error("Clipboard API is not available.");
   }
-  const textArea = document.createElement("textarea");
-  textArea.value = text;
-  textArea.style.position = "fixed";
-  textArea.style.left = "-9999px";
-  textArea.style.top = "0";
-  document.body.appendChild(textArea);
   try {
-    textArea.focus();
-    textArea.select();
-    const copied = document.execCommand("copy");
-    if (!copied) {
-      throw clipboardError instanceof Error ? clipboardError : new Error("Clipboard copy was not permitted.");
-    }
-  } finally {
-    textArea.remove();
+    await clipboard.writeText(text);
+  } catch (error) {
+    throw error instanceof Error ? error : new Error("Clipboard copy was not permitted.");
   }
 }
 function formatReportTimestamp(date) {

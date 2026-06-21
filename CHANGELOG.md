@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.20
+
+- Updated source to satisfy Obsidian review checks for settings headings, config-folder handling, network requests, confirmation modals, deletion preferences, active document/window usage, and deprecated browser APIs.
+- Replaced the deprecated `builtin-modules` build dependency with Node's `node:module` built-in module list.
+
 ## 0.1.19
 
 - PDF splitting now loads PDF.js only while converting an oversized handwritten PDF, instead of registering its worker at plugin startup.

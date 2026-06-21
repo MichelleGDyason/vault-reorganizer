@@ -127,8 +127,8 @@ Then copy these files into `.obsidian/plugins/vault-reorganizer` in the target v
 The GitHub release workflow builds the plugin and attaches the required Obsidian files to a release when a version tag is pushed:
 
 ```bash
-git tag 0.1.19
-git push origin 0.1.19
+git tag 0.1.20
+git push origin 0.1.20
 ```
 
 ## Notes
