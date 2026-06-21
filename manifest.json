@@ -1,9 +1,9 @@
 {
   "id": "vault-reorganizer",
   "name": "Vault Reorganizer",
-  "version": "0.1.7",
+  "version": "0.1.19",
   "minAppVersion": "1.5.0",
-  "description": "Preview and apply bulk vault reorganization plans for notes, attachments, templates, canvases, and other files.",
+  "description": "Preview and apply vault reorganization, image renaming, and handwriting-to-Markdown plans.",
   "author": "Michelle GDyason",
   "authorUrl": "https://github.com/MichelleGDyason",
   "isDesktopOnly": false

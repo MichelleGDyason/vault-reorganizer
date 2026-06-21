@@ -4,10 +4,13 @@ Vault Reorganizer is an Obsidian plugin for previewing and applying bulk vault c
 
 ## Recommended structure
 
-For a large vault, a practical target is usually six folders:
+For a large vault, a practical target is usually nine folders:
 
 - `Notes` for Markdown notes
-- `Attachments` for images, PDFs, audio, video, Office files, and other embedded assets
+- `Images` for image files
+- `Videos` for video files
+- `Sound` for audio files
+- `Attachments` for PDFs, Office files, archives, and other embedded assets
 - `Templates` for reusable Markdown templates
 - `Canvases` for Obsidian canvas files
 - `Bases` for Obsidian Bases `.base` files
@@ -24,6 +27,12 @@ If you prefer a very flat vault, use the **Markdown in root** strategy. It moves
 - Avoids target names that collide with existing folder-note style folders
 - Retries `Folder already exists` rename failures with Obsidian's lower-level vault rename
 - Uses a copy/delete fallback for stubborn root moves that both Obsidian rename methods refuse
+- Moves image files into a configurable `Images` folder before the general attachments folder
+- Moves video files into a configurable `Videos` folder before the general attachments folder
+- Moves audio files into a configurable `Sound` folder before the general attachments folder
+- Can use OpenAI vision to preview subject-based filenames for generic image names such as `IMG_1234.jpg`, screenshots, pasted images, and hash-like names
+- Can use OpenAI vision to preview handwritten-note images as Markdown notes before creating them
+- Moves images to `Images` during the image rename preview even when a file already has a human-readable name
 - Moves Obsidian Bases `.base` files into a configurable Bases folder
 - Lets users rename the destination folders in settings
 - Can centralize attachments without moving notes
@@ -41,12 +50,15 @@ If you prefer a very flat vault, use the **Markdown in root** strategy. It moves
 
 ## Strategies
 
-### Six folder vault
+### Nine folder vault
 
 Moves files into the configured destinations:
 
 - Markdown notes to `Notes`
-- Attachments to `Attachments`
+- Images to `Images`
+- Videos to `Videos`
+- Audio to `Sound`
+- Other attachments to `Attachments`
 - Templates to `Templates`
 - Canvas files to `Canvases`
 - Bases files to `Bases`
@@ -72,6 +84,10 @@ Moves attachment file types into `Attachments` and leaves notes where they are.
 8. If anything fails, use **Create report note** to save the exact file and folder paths that need attention.
 
 To clean up folders after a previous run, open the planner and click **Remove empty folders now**, or run **Vault Reorganizer: Remove empty folders** from the command palette.
+
+To rename generic image filenames, add your OpenAI API key in the plugin settings, then open the planner and click **Generate image rename preview**. The preview sends only the generic image files it needs to name to OpenAI, up to the configured limit, and shows the proposed filenames before anything is changed. PNG, JPEG, WebP, and non-animated GIF are enabled by default for AI naming. Other configured image types can still be moved to `Images` without AI naming.
+
+To transform handwritten notes, add your OpenAI API key in the plugin settings, then click **Generate handwriting Markdown preview**. By default, the plugin checks supported images and PDFs in `Images` and `Attachments`, skips files that are not detected as handwritten notes, previews the Markdown output, and creates Markdown notes in `Notes/Handwritten` only after you apply the preview. To target particular files, put one vault path, filename, wikilink, or `obsidian://open` URL per line in **Specific handwriting files**; when that field is set, the plugin checks only those files, treats them as handwritten note sources, and skips the folder-scan detection gate. Very large specifically listed PDFs, including some OneNote exports, can be rendered into temporary page images and converted into one combined Markdown note when **Split oversized handwriting PDFs** is enabled. The split pages are not saved as separate vault files, and handwriting output is restricted to `.md` files in the handwritten notes destination.
 
 ## Install from GitHub
 
@@ -111,10 +127,10 @@ Then copy these files into `.obsidian/plugins/vault-reorganizer` in the target v
 The GitHub release workflow builds the plugin and attaches the required Obsidian files to a release when a version tag is pushed:
 
 ```bash
-git tag 0.1.7
-git push origin 0.1.7
+git tag 0.1.19
+git push origin 0.1.19
 ```
 
 ## Notes
 
-The plugin intentionally does not infer semantic categories like projects, areas, or topics. Folder names are often inconsistent in old vaults, so the safest first pass is file-type cleanup. After that, use Obsidian links, tags, properties, search, and Dataview-style queries to build organization that does not depend on deep folder nesting.
+The plugin intentionally does not infer semantic categories like projects, areas, or topics. Folder names are often inconsistent in old vaults, so the safest first pass is file-type cleanup. The image rename tool is limited to visible image subjects for filenames. After that, use Obsidian links, tags, properties, search, and Dataview-style queries to build organization that does not depend on deep folder nesting.
