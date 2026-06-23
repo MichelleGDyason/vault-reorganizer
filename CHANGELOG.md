@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.21
+
+- Kept the deletion preference path compatible with the declared Obsidian `minAppVersion` by feature-detecting `FileManager.trashFile()` before falling back to adapter removal.
+- Renamed the settings tab heading so it does not repeat the plugin name.
+
 ## 0.1.20
 
 - Updated source to satisfy Obsidian review checks for settings headings, config-folder handling, network requests, confirmation modals, deletion preferences, active document/window usage, and deprecated browser APIs.

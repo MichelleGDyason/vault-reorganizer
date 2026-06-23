@@ -1,6 +1,6 @@
 {
   "name": "vault-reorganizer",
-  "version": "0.1.20",
+  "version": "0.1.21",
   "description": "An Obsidian plugin for previewing and applying bulk vault reorganization plans.",
   "main": "main.js",
   "repository": {

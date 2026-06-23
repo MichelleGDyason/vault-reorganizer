@@ -98,6 +98,10 @@ interface FolderCleanupResult {
   scanned: number;
 }
 
+interface FileManagerWithOptionalTrash {
+  trashFile?: (file: TAbstractFile) => Promise<void>;
+}
+
 interface ApplyResult {
   planKind: PlanKind;
   planLabel: string;
@@ -751,11 +755,33 @@ export default class VaultReorganizerPlugin extends Plugin {
 
     const currentFile = this.app.vault.getAbstractFileByPath(file.path);
     if (currentFile instanceof TFile) {
-      await this.app.fileManager.trashFile(currentFile);
+      await this.trashOrRemove(currentFile);
       return;
     }
 
     await this.app.vault.adapter.remove(file.path);
+  }
+
+  async trashOrRemove(file: TAbstractFile): Promise<void> {
+    const fileManager = this.app.fileManager as FileManagerWithOptionalTrash;
+    const trashFile = fileManager["trashFile"];
+
+    if (typeof trashFile === "function") {
+      await trashFile.call(fileManager, file);
+      return;
+    }
+
+    if (file instanceof TFile) {
+      await this.app.vault.adapter.remove(file.path);
+      return;
+    }
+
+    if (file instanceof TFolder) {
+      await this.app.vault.adapter.rmdir(file.path, false);
+      return;
+    }
+
+    throw new Error(`Could not remove unsupported file type: ${file.path}`);
   }
 
   chooseTarget(file: TFile, strategy: StrategyId): TargetChoice | null {
@@ -1417,7 +1443,7 @@ export default class VaultReorganizerPlugin extends Plugin {
       try {
         const file = this.app.vault.getAbstractFileByPath(filePath);
         if (file instanceof TFile) {
-          await this.app.fileManager.trashFile(file);
+          await this.trashOrRemove(file);
         } else {
           await this.app.vault.adapter.remove(filePath);
         }
@@ -1436,7 +1462,7 @@ export default class VaultReorganizerPlugin extends Plugin {
   async deleteEmptyFolder(folderPath: string): Promise<void> {
     const folder = this.app.vault.getAbstractFileByPath(folderPath);
     if (folder instanceof TFolder) {
-      await this.app.fileManager.trashFile(folder);
+      await this.trashOrRemove(folder);
       return;
     }
 
@@ -2183,7 +2209,7 @@ class VaultReorganizerSettingTab extends PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
 
-    new Setting(containerEl).setName("Vault Reorganizer").setHeading();
+    new Setting(containerEl).setName("Reorganization settings").setHeading();
 
     new Setting(containerEl)
       .setName("Default strategy")

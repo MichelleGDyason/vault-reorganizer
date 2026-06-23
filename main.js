@@ -100226,10 +100226,27 @@ var VaultReorganizerPlugin = class extends import_obsidian.Plugin {
     await this.app.vault.createBinary(target, data);
     const currentFile = this.app.vault.getAbstractFileByPath(file.path);
     if (currentFile instanceof import_obsidian.TFile) {
-      await this.app.fileManager.trashFile(currentFile);
+      await this.trashOrRemove(currentFile);
       return;
     }
     await this.app.vault.adapter.remove(file.path);
+  }
+  async trashOrRemove(file) {
+    const fileManager = this.app.fileManager;
+    const trashFile = fileManager["trashFile"];
+    if (typeof trashFile === "function") {
+      await trashFile.call(fileManager, file);
+      return;
+    }
+    if (file instanceof import_obsidian.TFile) {
+      await this.app.vault.adapter.remove(file.path);
+      return;
+    }
+    if (file instanceof import_obsidian.TFolder) {
+      await this.app.vault.adapter.rmdir(file.path, false);
+      return;
+    }
+    throw new Error(`Could not remove unsupported file type: ${file.path}`);
   }
   chooseTarget(file, strategy) {
     const extension = file.extension.toLowerCase();
@@ -100762,7 +100779,7 @@ var VaultReorganizerPlugin = class extends import_obsidian.Plugin {
       try {
         const file = this.app.vault.getAbstractFileByPath(filePath);
         if (file instanceof import_obsidian.TFile) {
-          await this.app.fileManager.trashFile(file);
+          await this.trashOrRemove(file);
         } else {
           await this.app.vault.adapter.remove(filePath);
         }
@@ -100779,7 +100796,7 @@ var VaultReorganizerPlugin = class extends import_obsidian.Plugin {
   async deleteEmptyFolder(folderPath) {
     const folder = this.app.vault.getAbstractFileByPath(folderPath);
     if (folder instanceof import_obsidian.TFolder) {
-      await this.app.fileManager.trashFile(folder);
+      await this.trashOrRemove(folder);
       return;
     }
     await this.app.vault.adapter.rmdir(folderPath, false);
@@ -101346,7 +101363,7 @@ var VaultReorganizerSettingTab = class extends import_obsidian.PluginSettingTab 
   display() {
     const { containerEl } = this;
     containerEl.empty();
-    new import_obsidian.Setting(containerEl).setName("Vault Reorganizer").setHeading();
+    new import_obsidian.Setting(containerEl).setName("Reorganization settings").setHeading();
     new import_obsidian.Setting(containerEl).setName("Default strategy").addDropdown((dropdown) => {
       dropdown.addOptions(STRATEGY_LABELS).setValue(this.plugin.settings.strategy).onChange(async (value) => {
         this.plugin.settings.strategy = value;
